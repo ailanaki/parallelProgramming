@@ -6,7 +6,7 @@
 #include <chrono>
 #include <cassert>
 
-#pragma once
+//#pragma once
 class quicksort {
     int BLOCK = 1000;
     std::random_device rd;
@@ -77,7 +77,7 @@ class quicksort {
     }
 
 public:
-    float time_difference(int k) {
+   // float time_difference(int k) {
 //        float result = 0;
 //        std::vector<float> sequence_time(k, 0);
 //        std::vector<float> parallel_time(k, 0);
@@ -124,5 +124,5 @@ public:
 //        std::cout << "\n";
 //
 //        return result / (float) k;
-    }
+    //}
 };

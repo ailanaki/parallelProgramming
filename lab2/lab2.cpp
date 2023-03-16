@@ -7,7 +7,6 @@
 #include "tbb/parallel_for.h"
 #include "tbb/task_scheduler_observer.h"
 #include "tbb/parallel_scan.h"
-#include "tbb/parallel_pipeline.h"
 
 
 using graph = std::vector<std::vector<int>>;
@@ -15,8 +14,8 @@ using list = std::vector<int>;
 using atomic = std::vector<std::atomic<bool>>;
 
 class bfs {
-    int n = 500;
-    int SCAN_BLOCK = 4000;
+    int SCAN_BLOCK = 6000;
+    int BLOCK = 2000;
     tbb::task_arena taskArena{5, 1}; // 1 процесс  для работы приложения, 4 для работы функций
 
     static void print(graph &a) {
@@ -49,9 +48,7 @@ class bfs {
     void scanUp(list &a, list &sums, int left, int right, int index) {
         if (right - left < SCAN_BLOCK) {
             int sum = 0;
-
             for (int i = left; i <= right; i++) {
-
                 sum += a[i];
             }
             sums[index] = sum;
@@ -79,7 +76,6 @@ class bfs {
             }
             return;
         }
-
         int m = (left + right) / 2;
         taskArena.execute([&] {
             tbb::parallel_invoke([&] {
@@ -98,12 +94,12 @@ class bfs {
     void scan(list &a, list &result) {
         auto sums = list(a.size() * 2 + 1, 0);
         scanUp(a, sums, 0, (int) a.size() - 1, 1);
-        scanDown(a, result, sums, 0, (int)a.size() - 1, 1, 0);
+        scanDown(a, result, sums, 0, (int) a.size() - 1, 1, 0);
     }
 
-    template<size_t limit = 2000, class Func>
-    void maybeParallelFor(int left, int right, Func func) {
-        if (right - left < limit) {
+    template<class Func>
+    void parallelFor(int left, int right, Func func) {
+        if (right - left < BLOCK) {
             for (int i = left; i <= right; i++) {
                 func(i);
             }
@@ -113,12 +109,36 @@ class bfs {
         auto m = (left + right) / 2;
         taskArena.execute([&] {
             tbb::parallel_invoke([&] {
-                                     maybeParallelFor(left, m, func);
+                                     parallelFor(left, m, func);
                                  },
                                  [&] {
-                                     maybeParallelFor(m + 1, right, func);
+                                     parallelFor(m + 1, right, func);
                                  });
         });
+    }
+
+    template<class Func>
+    list filter(const list &x, Func b) {
+        list flags(x.size());
+        taskArena.execute([&] {
+            parallelFor(0, (int) x.size() - 1, [&](size_t i) {
+                if (b(x[i])) {
+                    flags[i] = true;
+                }
+            });
+        });
+        list indexes(flags.size() + 1);
+        scan(flags, indexes);
+        list res(indexes[indexes.size() - 1], -1);
+        taskArena.execute([&] {
+            parallelFor(0, (int) x.size() - 1, [&](size_t i) {
+                if (flags[i] == 1) {
+                    int pos = indexes[i];
+                    res[pos] = x[i];
+                }
+            });
+        });
+        return res;
     }
 
     void parallelBFS(graph &a, list &distances) {
@@ -137,20 +157,19 @@ class bfs {
             int nextFrontierSize = startBlock.back();
             auto nextFrontier = list(nextFrontierSize);
             deg = list(nextFrontierSize);
-            maybeParallelFor(0, f.size() - 1, [&](int currentIndex) {
+            parallelFor(0, (int) f.size() - 1, [&](int currentIndex) {
                 int current = f[currentIndex] - 1;
                 if (current != -1) {
                     auto neighbours = &a[current];
                     auto ind = startBlock[currentIndex];
-                    maybeParallelFor(0, (int) neighbours->size() - 1, [&](int i) {
+                    parallelFor(0, (int) neighbours->size() - 1, [&](int i) {
                         int next = neighbours->operator[](i);
                         bool exp = false;
                         if (visited[next].compare_exchange_strong(exp, true)) {
                             distances[next] = dist;
                             nextFrontier[ind + i] = next + 1;
-                            deg[ind + i] = a[next].size();
+                            deg[ind + i] = (int) a[next].size();
                         }
-
                     });
                 }
             });
@@ -159,9 +178,8 @@ class bfs {
         }
     }
 
-    void generate_cubic(std::vector<std::vector<int>> &a) const {
+    void generate_cubic(std::vector<std::vector<int>> &a, int n) const {
         a = std::vector<std::vector<int>>(n * n * n);
-
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 for (int k = 0; k < n; ++k) {
@@ -179,7 +197,6 @@ class bfs {
     }
 
     static void add(list &a, int size, int x, int y, int z) {
-
         if (x >= 0 && y >= 0 && z >= 0 && x < size && y < size && z < size) {
             auto point = (x * size + y) * size + z;
             a.push_back(point);
@@ -201,7 +218,7 @@ class bfs {
         a.emplace_back();
     }
 
-    bool checkBFSResult(list &distances, int size) {
+    static bool checkBFSResult(list &distances, int size) {
         for (int i = 0; i < size; i++) {
             for (int j = 0; j < size; j++) {
                 for (int k = 0; k < size; k++) {
@@ -215,7 +232,7 @@ class bfs {
         return true;
     }
 
-    void print(std::vector<float> &a) {
+    static void print(std::vector<float> &a) {
         for (auto elem: a) {
             std::cout << elem << " ";
         }
@@ -224,8 +241,8 @@ class bfs {
 
 public:
 
-    void generate() {
-        int k = 1;
+    void generate(int n) {
+        int k = 5;
         float result = 0;
         std::vector<float> sequence_time(k, 0);
         std::vector<float> parallel_time(k, 0);
@@ -236,11 +253,10 @@ public:
             std::vector<int> distance1, distance2;
 
             auto begin = std::chrono::high_resolution_clock::now();
-            generate_cubic(a);
+            generate_cubic(a, n);
             auto end = std::chrono::high_resolution_clock::now();
             auto gen_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count();
-            std::cout << "GENTIME: " << gen_time << "\n";
-
+        //    std::cout << "GENTIME: " << gen_time << "\n";
 
             begin = std::chrono::high_resolution_clock::now();
             sequentinalBFS(a, distance1);
@@ -255,9 +271,7 @@ public:
             parallel_time[i] = (float) b_time;
             std::cout << "CHECK: " << (checkBFSResult(distance2, n)) << " " << (distance1 == distance2) << "\n";
 
-
-            diffecence[i] = (float) a_time / (float) b_time;
-            result += diffecence[i];
+            result +=  (float) a_time / (float) b_time;
         }
 
         std::cout << "sequence: ";
@@ -266,10 +280,6 @@ public:
 
         std::cout << "parallel: ";
         print(parallel_time);
-        std::cout << "\n";
-
-        std::cout << "difference: ";
-        print(diffecence);
         std::cout << "\n";
 
         std::cout << "result: " + std::to_string(result / (float) k) << "\n";
